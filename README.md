@@ -5,16 +5,28 @@ Raw sequencing data have been uploaded and deposited into CNGB Sequence Archive 
 If you have any question or suggestion, please contect lilab_in_siat@163.com
 
 ## Software
-R v4.1.1
-HISAT v0.1.6
-CellRanger V6.1.2
-MetaCell V0.3.7
-DoubletfinderV2.0.3
-Seurat v4.3.0
-Libra v1.0.0
-Samtools
-Slingshot
-Monocle3
-ScVelo
-CytoTRACE
-python v3.7.1
+R v4.1.1/
+HISAT v0.1.6/
+CellRanger V6.1.2/
+MetaCell V0.3.7/
+DoubletfinderV2.0.3/
+Seurat v4.3.0/
+Libra v1.0.0/
+Samtools/
+Slingshot/
+Monocle3/
+ScVelo/
+CytoTRACE/
+python v3.7.1/
+
+## Guide
+The typical installation time for a "standard" desktop computer is 6 hours.
+
+## Demo
+data:mc2su_test.rda
+expected output: /Figs
+time: 10 min
+
+## Annotation
+After the environment is installed, you can reproduce the demonstration results according to the Script_demo.R script. You can fully reproduce the results after obtaining the complete data by following the Script_all.R script.
+
