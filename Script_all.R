@@ -480,7 +480,196 @@
   ggsave("./fig_result/Cluster0 in Healthy.pdf",health_all,width = 8, height = 8)  
   health_all=plot_alluvium(health$stage,health$cluster0,"Menstrual Cycle","Cluster0","Cluster in Healthy",col_Myeloid_cluster0)
   ggsave("/home/yangjing/fig_result/Cluster0 in Healthy in Myeloid_cluster0.pdf",health_all,width = 8, height = 8) 
-
+  #python-gene module
+    import sys
+    import warnings; warnings.simplefilter('ignore')
+    import os
+    import numpy as np
+    import pandas as pd
+    import hotspot
+    import matplotlib.pyplot as plt
+    import matplotlib.colors
+    import seaborn as sns
+    import mplscience
+    import matplotlib.pyplot as plt
+    import anndata as ad
+    from scipy.io import mmread
+    from scipy.sparse import csr_matrix
+    
+    import scanpy as sc
+    os.chdir("/share/data0/UserData/yangjing/20230710/all/Seurat/")
+    adata1 = sc.read_h5ad('mc2su_NKILC2.h5ad')
+    adata1.obs["cluster1"] = adata1.obs["cluster_recombined"]
+    adata = ad.concat([adata1, adata2], join='outer')
+    filtered_adata = adata[adata.obs["sorting"] == "CD45+", :]
+    filtered_adata = filtered_adata[filtered_adata.obs["disease"] == "healthy", :]
+    filtered_adata = filtered_adata[~(filtered_adata.obs["stage"] =="na"), :]
+    filtered_adata = filtered_adata[~((filtered_adata.obs["cluster_recombined"] =="ILC2")|(filtered_adata.obs["cluster_recombined"] =="ILC3")), :]
+    sc.pp.filter_genes(filtered_adata, min_cells=50)
+    #Compute a Latent Space with PCA
+    filtered_adata.layers["counts"] = filtered_adata.X.copy()
+    sc.pp.normalize_total(filtered_adata)
+    sc.pp.log1p(filtered_adata)
+    filtered_adata.layers["log_normalized"] = filtered_adata.X.copy()
+    sc.pp.scale(filtered_adata)
+    sc.tl.pca(filtered_adata)
+    with mplscience.style_context():
+        sc.pl.pca_variance_ratio(filtered_adata,save="mc2su_cd8T_NK_PCA.pdf")
+    filtered_adata.layers["counts_csc"] = filtered_adata.layers["counts"].tocsc()
+    hs = hotspot.Hotspot(
+        filtered_adata,
+        layer_key="counts_csc",
+        model='danb',
+        latent_obsm_key="X_pca",
+        umi_counts_obs_key="nCount_RNA"
+    )
+    
+    hs.create_knn_graph(
+        weighted_graph=False, n_neighbors=30,)
+    hs_results = hs.compute_autocorrelations(jobs=2)
+  
+    hs_genes = hs_results.loc[hs_results.FDR < 0.05].sort_values('Z', ascending=False).head(1000).index
+    # Compute pair-wise local correlations between these genes
+    lcz = hs.compute_local_correlations(hs_genes, jobs=2)
+    # lcz.to_csv('gene_cor_matrix.txt', sep='\t', index=True)
+    modules = hs.create_modules(
+        min_gene_threshold=15, core_only=True, fdr_threshold=0.05)
+    modules.to_csv('cd8T_NK_gene_modules.txt', sep='\t', index=True)
+    modules.value_counts()
+    #Plotting module correlations
+    hs.plot_local_correlations(vmin=-12, vmax=12)
+    plt.savefig('NK_plot.pdf')
+    
+    # Show the top genes for a module
+    module = 7
+    results = hs.results.join(hs.modules)
+    results = results.loc[results.Module == module]
+    results.sort_values('Z', ascending=False)
+    
+    LOC=(results.index=="GNLY")
+    results[LOC]
+    #Summary Module Scores
+    module_scores = hs.calculate_module_scores()
+    module_scores.head()
+    
+    module_cols = []
+    for c in module_scores.columns:
+        key = f"Module {c}"
+        filtered_adata.obs[key] = module_scores[c]
+        module_cols.append(key)    
+        
+    filtered_adata.obs.to_csv('filter_cd8T_NK_obs.txt', sep='\t')
+    ###转R分析
+    library(dplyr)
+    library(ggplot2)
+    library(ggsignif)
+    library(paletteer)
+    col_stage=paletteer_d("basetheme::clean",8)
+    setwd("/share/swap/yangjing/")
+    metadata=read.table("./filter_cd8T_NK_obs.txt",sep="\t",header=T)
+    metadata$stage=factor(metadata$stage,levels=c("menstrual","Early-pro","Mid-pro","Late-pro","Early-sec","Mid-sec","Late-sec","Late-Late-sec"))
+    
+    sample_meta <- metadata %>%
+      group_by(stage) %>%
+      summarise(across(31:53,mean))#NKILC:31:54
+    col_col = list(celltype=as.character(col_stage))
+    names(col_col$celltype)=levels(sample_meta$stage)
+    library(circlize)
+    library(ComplexHeatmap)
+    col_fun <- colorRamp2(
+      c(-2,-1, 0, 1,2), 
+      c("#0A0738","#1E16A0", "#FFFFFF","#EBD353","#F3750F")      #c("#146152", "white","#FF5A33")
+      )
+    col_top=HeatmapAnnotation(
+        celltype=sample_meta$stage,
+        annotation_name_side="right",col=col_col)
+    mtx=sample_meta[,2:24]
+    p1=ComplexHeatmap::Heatmap(t(mtx), name = "modules score", cluster_columns = TRUE,#column_order=order(sample_meta$stage),
+            cluster_rows =TRUE,clustering_distance_rows="pearson",top_annotation=col_top,show_column_dend = FALSE,show_row_dend = FALSE,#row_names_gp = gpar(fontsize = 6),
+            show_column_names = TRUE,column_names_rot = 45,col = col_fun,column_names_side="top")#
+    # pdf("./figures/heatmap_NKILC_stage_findallmarkerpy.pdf",width =5, height = 7)#15
+    pdf("./figures/heatmap_cd8+T+NK_stage_findallmarkerpy.pdf",width =5, height = 7)
+    p1
+    dev.off()
+    ####module gene correlation
+    module_list=read.table("gene_modules.txt",sep="\t",header=T)
+    cor_mtx=read.table("gene_cor_matrix.txt",sep="\t",header=T)
+    rownames(cor_mtx)=cor_mtx$X;cor_mtx=cor_mtx[,-1]
+    # module_list=module_list[!(module_list$Module %in% c(-1,1,2,8,17,19,11,13,15)),]
+    module_list=module_list[(module_list$Module %in% c(23,22,12,21,4)),]
+    # module_order=c(16,10,14,24,20,5,7,9,3,6,18,23,22,12,21,4)#11,13,15,
+    module_order=c(23,22,12,21,4)
+    module_list$Module=factor(module_list$Module,levels=module_order)
+    module_list=module_list[order(module_list$Module),]
+    loc=match(module_list$X,rownames(cor_mtx))
+    cor_mtx=cor_mtx[loc,];cor_mtx=cor_mtx[,loc]
+    
+    #plot heatmap
+    library(circlize)
+    library(ComplexHeatmap)
+    library(RColorBrewer)
+    col_col = list(module=as.character(colorRampPalette(brewer.pal(9, "Set1"))(length(module_order))))
+    names(col_col$module)=levels(module_list$Module)
+    col_fun <- colorRamp2(
+      c(-30,0, 30), 
+      c("#0000FF", "white","#FF2424")#c("#0A0738","#FFFFFF","#F3750F")      #c("#146152", "white","#FF5A33")
+      )
+    col_top=HeatmapAnnotation(
+        module=module_list$Module,
+        annotation_name_side="right",col=col_col)
+    categories <- module_list$Module
+    row_left <- rowAnnotation(category = categories, col = col_col)
+    
+    
+    p1=ComplexHeatmap::Heatmap(cor_mtx, name = "module correlation", cluster_columns = FALSE,left_annotation=row_left,#top_annotation=col_top,
+            cluster_rows =FALSE,clustering_distance_rows="pearson",show_column_dend = FALSE,show_row_dend = FALSE,#row_names_gp = gpar(fontsize = 6),
+            show_column_names = FALSE,column_names_rot = 45,column_names_side="top",show_row_names=FALSE,col = col_fun,use_raster=TRUE)#
+    pdf("./figures/heatmap_module_corr1_NK1.pdf",width =15, height = 15)#15
+    p1
+    dev.off()
+    
+    #cluster similarity
+    mtx=as.matrix(sample_meta[,2:24])
+    rownames(mtx)=sample_meta$cluster1
+    cor_mtx=cor(t(mtx),method="pearson")
+    col_fun <- colorRamp2(
+      c(-1,0, 1), 
+      c("#0A0738", "white","#F3750F")      #c("#146152", "white","#FF5A33")
+      )
+    col_col = list(celltype=as.character(col_stage))
+    names(col_col$celltype)=unique(sample_meta$cluster1)
+    col_top=HeatmapAnnotation(
+        celltype=rownames(cor_mtx),
+        annotation_name_side="right",col=col_col)
+    p1=ComplexHeatmap::Heatmap(cor_mtx, name = "cluster similarity", cluster_columns = TRUE,#column_order=order(sample_meta$stage),
+            cluster_rows =TRUE,clustering_distance_rows="pearson",top_annotation=col_top,show_column_dend = FALSE,show_row_dend = FALSE,#row_names_gp = gpar(fontsize = 6),
+            show_column_names = TRUE,column_names_rot = 45,col = col_fun,column_names_side="top")#
+    pdf("./figures/heatmap_cluster_similarity.pdf",width =5, height =4)#15
+    p1
+    dev.off()
+    
+    #gene module pathway enrichment
+    module_list=read.table("gene_modules.txt",sep="\t",header=T)
+    cor_mtx=read.table("gene_cor_matrix.txt",sep="\t",header=T)
+    library(clusterProfiler)
+    library(org.Hs.eg.db)
+    library(openxlsx)
+    wb <- createWorkbook()
+    gm=c(23,22,12,21,4)
+    j=1
+    gene_list=AnnotationDbi::select(org.Hs.eg.db,keys=k,columns = c("ENSEMBL","ENTREZID"), keytype="SYMBOL")
+    for(i in gm){
+      gene_int=module_list[module_list$Module==i,]$X
+      k=AnnotationDbi::keys(org.Hs.eg.db,keytype = "SYMBOL")
+      gene_int_id=gene_list[match(gene_int,gene_list$SYMBOL),]$ENTREZID
+      gene_int_id=na.omit(gene_int_id)
+      eGO_imp= enrichGO(gene_int_id, OrgDb = "org.Hs.eg.db", ont="CC",pvalueCutoff=0.05,pAdjustMethod="BH",qvalueCutoff=0.05,readable=TRUE) 
+      eGO_imp=eGO_imp@result
+      addWorksheet(wb, sheetName = paste0("GeneModule_", j))
+      writeData(wb, sheet = paste0("GeneModule_", j), x = eGO_imp)
+      j=j+1
+    }
+    saveWorkbook(wb, file = "gene_modules_CCresults_NK1.xlsx", overwrite = TRUE)
 #Fig3
   library(paletteer)
   library(cowplot)
